@@ -68,6 +68,7 @@ class KirAuth:
             known=bool(acl.get("known", False)),
             obras_general=bool(obras.get("general")),
             obras_codigos=list(obras.get("codigos", [])),
+            phone=acl.get("phone"),
         )
 
     # ── dependencias FastAPI ──────────────────────────────────────────────
