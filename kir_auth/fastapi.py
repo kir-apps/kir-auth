@@ -69,6 +69,7 @@ class KirAuth:
             obras_general=bool(obras.get("general")),
             obras_codigos=list(obras.get("codigos", [])),
             phone=acl.get("phone"),
+            admin_sections=list(acl.get("admin_sections", [])),
         )
 
     # ── dependencias FastAPI ──────────────────────────────────────────────

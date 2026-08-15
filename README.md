@@ -8,12 +8,15 @@ sidecar y consulta los roles al Hub.
 
 ## Instalar
 
-**Fase 0** — el SDK se *vendoriza* (se copia) dentro de cada app.
-`kir-platform/scripts/new-app.sh` lo hace solo. Para actualizarlo a mano:
+El paquete se publica **tag-versionado** desde este repo — sin vendoring. Una
+app lo pinea en su `requirements.txt`:
 
-```bash
-cp -r kir-platform/sdks/python/kir_auth  <tu-app>/kir_auth
 ```
+kir-auth @ git+https://github.com/kir-apps/kir-auth.git@v0.3.0
+```
+
+(Migrar una app existente de su copia vendorizada a este paquete es un paso
+aparte, de a una app por vez — no ocurre solo por publicar acá.)
 
 Dependencias que la app debe tener: `httpx`, `fastapi`.
 
@@ -61,6 +64,13 @@ user.is_platform_admin  # bool
 user.roles              # ["admin", "viewer"] — roles en ESTA app
 user.has_role("admin")  # bool (platform admin pasa siempre)
 user.known              # False si el Hub nunca vio a este usuario
+user.phone              # str | None — teléfono enriquecido desde Entra (Graph)
+user.obras_general      # bool — ACL por obra (Fase 3): ve todas las obras
+user.obras_codigos      # list[str] — ACL por obra: códigos puntuales habilitados
+user.can_see_obra(cod)  # bool (platform admin y obras_general pasan siempre)
+user.admin_sections     # list[str] — secciones delegadas del /admin del Hub
+                         # (p. ej. "obras"), para apps que exponen paneles propios
+                         # de administración condicionados por esa delegación
 ```
 
 ## Cómo consigue los roles
