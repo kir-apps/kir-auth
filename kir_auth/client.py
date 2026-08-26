@@ -23,11 +23,17 @@ class PlatformClient:
         platform_token: str,
         *,
         cache_ttl_seconds: int = 60,
+        stale_max_seconds: int = 900,
     ) -> None:
         self._hub = hub_url.rstrip("/")
         self._app = app_slug
         self._token = platform_token
         self._ttl = cache_ttl_seconds
+        # Cuánto se puede seguir sirviendo una ACL vencida cuando el Hub no
+        # responde (#163). 15 minutos: suficiente para que un reinicio del Hub
+        # o un pico de red no eche a todo el mundo, y acotado para que una
+        # revocación no quede sin efecto por tiempo indefinido.
+        self._stale_max = stale_max_seconds
         # email -> (expira_en, data)
         self._cache: dict[str, tuple[float, dict]] = {}
 
@@ -47,8 +53,23 @@ class PlatformClient:
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:
+            # Hub caído: se degrada con la copia cacheada, pero NO para siempre
+            # (#163). Antes este branch no miraba la expiración: a un usuario al
+            # que le revocaban el acceso durante una caída larga del Hub le
+            # seguían valiendo sus roles viejos mientras el proceso no
+            # reiniciara — o sea, sin límite.
+            #
+            # `cached[0]` es cuándo venció el TTL normal; se admite servirla
+            # hasta `stale_max` DESPUÉS de eso. Pasado ese punto se falla
+            # cerrado, igual que en la primera llamada sin cache: preferimos
+            # dejar afuera a alguien con acceso legítimo a dejar adentro a
+            # alguien a quien se lo sacaron.
+            if cached and now - cached[0] <= self._stale_max:
+                return cached[1]
             if cached:
-                return cached[1]  # Hub caído: degradar con la copia cacheada.
+                # Se descarta explícitamente para que un Hub que vuelve no
+                # reviva una ACL vieja por una carrera.
+                self._cache.pop(email, None)
             raise PlatformError(f"no se pudo consultar la ACL del Hub: {exc}") from exc
         self._cache[email] = (now + self._ttl, data)
         return data

@@ -2,6 +2,21 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
+## [0.4.0] — sin publicar
+
+**El fallback stale de la ACL está acotado** (`kir-platform#163`). Cuando el Hub
+no responde, el SDK sigue sirviendo la copia cacheada — pero ahora sólo hasta
+`stale_max_seconds` (default 900) después de vencido el TTL. Pasado ese punto
+falla cerrado, igual que en la primera llamada sin cache.
+
+Antes ese branch no miraba la expiración: a un usuario al que le revocaban el
+acceso durante una caída larga del Hub le seguían valiendo sus roles viejos
+mientras el proceso no reiniciara, o sea **sin límite**.
+
+La asimetría es deliberada: un reinicio del Hub no puede echar a todo el mundo,
+pero pasado un rato es preferible dejar afuera a alguien con acceso legítimo que
+dejar adentro a alguien a quien se lo sacaron.
+
 ## [0.3.0] — sin publicar
 
 Corrige una deriva entre el repo canónico y las copias vendorizadas en las 5

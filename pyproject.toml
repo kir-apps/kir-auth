@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kir-auth"
-version = "0.3.0"
+version = "0.4.0"
 description = "SDK cliente del KIR Platform Hub — identidad (oauth2-proxy) + ACL para mini-apps"
 requires-python = ">=3.11"
 dependencies = [
