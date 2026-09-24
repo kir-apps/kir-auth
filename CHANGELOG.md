@@ -2,7 +2,14 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
-## [0.4.0] — sin publicar
+## [0.4.0] — 2026-09-23
+
+Primera versión que las apps pueden consumir sin perder nada: las cinco copias
+vendorizadas (obras, stock, seleccion, servicios, controldegestion) ya declaran
+`0.4.0` y tienen el arreglo de #163. `v0.3.0` no lo tiene, así que migrarlas a
+esa versión (como decía `kir-platform#268`) habría sido volver atrás en
+seguridad. Además de lo que tienen las copias, esta versión suma `phone` y
+`admin_sections` en `Identity`, dos campos nuevos con default.
 
 **El fallback stale de la ACL está acotado** (`kir-platform#163`). Cuando el Hub
 no responde, el SDK sigue sirviendo la copia cacheada — pero ahora sólo hasta
@@ -17,7 +24,7 @@ La asimetría es deliberada: un reinicio del Hub no puede echar a todo el mundo,
 pero pasado un rato es preferible dejar afuera a alguien con acceso legítimo que
 dejar adentro a alguien a quien se lo sacaron.
 
-## [0.3.0] — sin publicar
+## [0.3.0] — publicada como tag `v0.3.0`
 
 Corrige una deriva entre el repo canónico y las copias vendorizadas en las 5
 apps (`kir-platform#164`): las cinco declaraban `__version__ = "0.2.0"` pero
