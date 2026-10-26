@@ -4,6 +4,47 @@
 > Este repo es **público**: acá van decisiones de diseño de la librería, no
 > nombres de hosts, ids ni topología de ninguna instalación.
 
+## Verificación del ID token del proxy, opt-in (kir-platform#571, 2026-10-26 · risk:high)
+
+**Por qué.** La guarda de origen depende de la red: quien pueda crear
+contenedores puede detener el proxy y quedarse con su nombre. El ID token que el
+proveedor firma no se puede fabricar sin su clave privada; si el proxy lo
+reenvía (`pass_authorization_header`), la app puede probar la identidad sola.
+
+**Decisiones.**
+- **ID token, no access token.** El access token de Entra suele ser para otra
+  audiencia (Graph) y no está pensado para que lo valide un tercero; el ID token
+  tiene `aud` = el client id de la app, que es justo lo que hay que exigir.
+- **El email del header tiene que estar entre los del token**, en vez de tomar el
+  del token y listo: el header es el que la app usó siempre (y el que el Hub
+  tiene en la ACL), y según `oidc_email_claim` del proxy sale de `email` o de
+  `preferred_username`. Se aceptan los dos claims por default.
+- **Modo `observar`.** Lo que no se puede verificar sin producción —que el
+  Bearer que manda el proxy sea el ID token esperado, con qué claims, y que se
+  renueve antes de vencer— se mira con la verificación prendida pero sin
+  rechazar, y con avisos acotados (uno por motivo cada 5 min) para que un proxy
+  todavía sin el header no llene el log.
+- **401 sólo para el token vencido**; el resto 403. Un re-login trae un token
+  nuevo; no arregla una firma ni una audiencia, y sería un bucle.
+- **Algoritmo fijo RS256**, `kid` obligatorio, JWKS por discovery con el
+  `issuer` del documento comparado contra el configurado.
+- **Tope de una re-descarga del JWKS por minuto** ante `kid` desconocidos, y
+  cache servido hasta 24 h si el proveedor no responde (misma asimetría que la
+  ACL: no echar a todos por una caída, pero no para siempre).
+- **PyJWT como extra**, importado al construir: la app que prende el modo sin el
+  extra no arranca; las demás no suman `cryptography`.
+- **Los motivos de rechazo son una lista cerrada** (`kir_auth.idtoken.MOTIVOS`).
+  La primera versión armaba el motivo con datos del token
+  (`f"algoritmo {alg!r} no permitido"`) y lo usaba como clave del throttle de
+  avisos y como texto de la respuesta. La revisión de seguridad marcó que así un
+  atacante, variando `alg`/`kid`, agrandaba el dict sin límite, se salteaba el
+  rate-limit del log y metía texto suyo en la respuesta. Ahora el motivo es fijo
+  y lo que vino en el token va en `detalle`, saneado (sólo imprimibles) y
+  truncado a 80, **sólo al log**. Un test manda 1000 `alg` distintos y 1000
+  `kid` inventados: dos claves en el dict, dos líneas de log.
+- **Nada de la instalación en el código ni en los tests**: tenant, client id y
+  URLs salen del entorno; los tests usan claves generadas en el momento.
+
 ## Guarda de origen de la identidad (kir-platform#571, 2026-10-26 · risk:high)
 
 **Por qué.** `KirAuth` aceptaba `X-Forwarded-Email` sin mirar quién lo mandaba.

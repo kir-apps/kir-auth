@@ -28,14 +28,18 @@ Uso típico en una mini-app FastAPI:
 """
 from kir_auth.client import PlatformClient, PlatformError
 from kir_auth.fastapi import KirAuth
+from kir_auth.idtoken import ErrorJWKS, TokenInvalido, VerificadorIdToken
 from kir_auth.models import Identity
 from kir_auth.origen import GuardaDeOrigen
 
 __all__ = [
+    "ErrorJWKS",
     "GuardaDeOrigen",
     "Identity",
     "KirAuth",
     "PlatformClient",
     "PlatformError",
+    "TokenInvalido",
+    "VerificadorIdToken",
 ]
-__version__ = "0.5.0"
+__version__ = "0.6.0"
