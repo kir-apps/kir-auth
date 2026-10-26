@@ -33,6 +33,15 @@ reenvía (`pass_authorization_header`), la app puede probar la identidad sola.
   ACL: no echar a todos por una caída, pero no para siempre).
 - **PyJWT como extra**, importado al construir: la app que prende el modo sin el
   extra no arranca; las demás no suman `cryptography`.
+- **Los motivos de rechazo son una lista cerrada** (`kir_auth.idtoken.MOTIVOS`).
+  La primera versión armaba el motivo con datos del token
+  (`f"algoritmo {alg!r} no permitido"`) y lo usaba como clave del throttle de
+  avisos y como texto de la respuesta. La revisión de seguridad marcó que así un
+  atacante, variando `alg`/`kid`, agrandaba el dict sin límite, se salteaba el
+  rate-limit del log y metía texto suyo en la respuesta. Ahora el motivo es fijo
+  y lo que vino en el token va en `detalle`, saneado (sólo imprimibles) y
+  truncado a 80, **sólo al log**. Un test manda 1000 `alg` distintos y 1000
+  `kid` inventados: dos claves en el dict, dos líneas de log.
 - **Nada de la instalación en el código ni en los tests**: tenant, client id y
   URLs salen del entorno; los tests usan claves generadas en el momento.
 

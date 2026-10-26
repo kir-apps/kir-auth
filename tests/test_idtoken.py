@@ -437,3 +437,52 @@ def test_construir_no_sale_a_la_red(monkeypatch):
     monkeypatch.setattr(httpx, "get", explota)
     _auth_env(monkeypatch, IDENTIDAD_JWT_MODO="exigir", IDENTIDAD_JWT_ISSUER=ISSUER,
               IDENTIDAD_JWT_AUDIENCIA=AUD)
+
+
+# ── motivos de una lista cerrada (revisión de seguridad del PR) ──────────────
+
+def _token_con_header(header: dict) -> str:
+    import base64
+    def b64(d):
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
+    return f"{b64(header)}.{b64({'iss': ISSUER})}.c2lu"
+
+
+def test_mil_alg_distintos_no_agrandan_el_throttle_ni_el_log(monkeypatch, caplog):
+    """El motivo es la clave del throttle: si llevara el `alg`/`kid` del token,
+    un atacante haría crecer el dict sin límite y se saltearía el rate-limit."""
+    auth = _auth(monkeypatch, modo="observar")
+    with caplog.at_level(logging.WARNING, logger="kir_auth"):
+        for i in range(1000):
+            tok = _token_con_header({"alg": f"X{i}", "kid": f"k{i}"})
+            auth.require_login(_con(tok))
+        for i in range(1000):
+            auth.require_login(_con(_token(privada=OTRA, kid=f"inventado-{i}")))
+    assert len(auth._jwt_avisos) <= 2
+    assert set(auth._jwt_avisos) == {"token: algoritmo no permitido", "token: kid desconocido"}
+    assert len([r for r in caplog.records if "ID token no válido" in r.getMessage()]) == 2
+
+
+def test_la_respuesta_no_lleva_datos_del_token(monkeypatch):
+    auth = _auth(monkeypatch)
+    tok = _token_con_header({"alg": "<script>alert(1)</script>", "kid": "k1"})
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(_con(tok))
+    assert exc.value.detail == "identidad rechazada: token: algoritmo no permitido"
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(_con(_token(privada=OTRA, kid="kid-del-atacante")))
+    assert "kid-del-atacante" not in exc.value.detail
+
+
+def test_el_detalle_va_al_log_saneado_y_truncado(monkeypatch, caplog):
+    v, _, _ = _verificador()
+    with pytest.raises(TokenInvalido) as exc:
+        v.verificar(_token_con_header({"alg": "A\nFALSO: línea inyectada" + "x" * 500, "kid": "k1"}))
+    assert exc.value.motivo == "algoritmo no permitido"
+    assert "\n" not in exc.value.detalle
+    assert len(exc.value.detalle) <= 81
+
+
+def test_motivo_fuera_de_la_lista_no_se_puede_construir():
+    with pytest.raises(ValueError):
+        TokenInvalido("algoritmo 'HS256' no permitido")

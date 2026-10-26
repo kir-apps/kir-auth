@@ -44,14 +44,45 @@ log = logging.getLogger("kir_auth")
 Descargador = Callable[[str], dict]
 
 
-class TokenInvalido(Exception):
-    """El token no prueba la identidad. `vencido` distingue el caso que un
-    re-login arregla (token viejo) de los que no (firma, emisor, audiencia)."""
+# Motivos de rechazo: una lista CERRADA. El motivo se usa como clave del
+# throttle de avisos y como texto de la respuesta HTTP, así que nunca puede
+# llevar nada que venga del token (alg, kid, claims): un atacante que los varía
+# haría crecer el dict de avisos sin límite, se saltearía el rate-limit del log
+# y metería texto suyo en la respuesta. El detalle, si sirve, va aparte
+# (`detalle`), saneado y truncado, y sólo al log.
+NO_ES_JWT = "no es un JWT"
+ALGORITMO = "algoritmo no permitido"
+SIN_KID = "sin kid"
+KID_DESCONOCIDO = "kid desconocido"
+VENCIDO = "vencido"
+AUDIENCIA = "audiencia no aceptada"
+EMISOR = "emisor no aceptado"
+FIRMA = "firma inválida"
+INVALIDO = "token inválido"
+MOTIVOS = frozenset({NO_ES_JWT, ALGORITMO, SIN_KID, KID_DESCONOCIDO, VENCIDO,
+                     AUDIENCIA, EMISOR, FIRMA, INVALIDO})
 
-    def __init__(self, motivo: str, *, vencido: bool = False) -> None:
+_LARGO_DETALLE = 80
+
+
+def sanear(valor: object) -> str:
+    """Texto apto para un log: sólo imprimibles, sin saltos de línea, truncado."""
+    texto = "".join(c if c.isprintable() else "?" for c in str(valor))
+    return texto[:_LARGO_DETALLE] + ("…" if len(texto) > _LARGO_DETALLE else "")
+
+
+class TokenInvalido(Exception):
+    """El token no prueba la identidad. `motivo` es uno de `MOTIVOS` (fijo, sin
+    datos del token); `detalle` es para el log. `vencido` distingue el caso que
+    un re-login arregla (token viejo) de los que no (firma, emisor, audiencia)."""
+
+    def __init__(self, motivo: str, *, detalle: str | None = None) -> None:
+        if motivo not in MOTIVOS:
+            raise ValueError(f"motivo fuera de la lista cerrada: {sanear(motivo)}")
         super().__init__(motivo)
         self.motivo = motivo
-        self.vencido = vencido
+        self.detalle = sanear(detalle) if detalle is not None else None
+        self.vencido = motivo == VENCIDO
 
 
 class ErrorJWKS(Exception):
@@ -187,7 +218,7 @@ class VerificadorIdToken:
             self._refrescar()
             clave = (self._claves or {}).get(kid)
         if clave is None:
-            raise TokenInvalido("firmado con una clave (kid) que el proveedor no publica")
+            raise TokenInvalido(KID_DESCONOCIDO, detalle=f"kid={kid!r}")
         return clave
 
     # ── verificación ─────────────────────────────────────────────────────
@@ -198,13 +229,13 @@ class VerificadorIdToken:
         try:
             header = jwt.get_unverified_header(token)
         except jwt.InvalidTokenError:
-            raise TokenInvalido("no es un JWT") from None
+            raise TokenInvalido(NO_ES_JWT) from None
         alg = header.get("alg")
         if alg not in self.algoritmos:
-            raise TokenInvalido(f"algoritmo {alg!r} no permitido")
+            raise TokenInvalido(ALGORITMO, detalle=f"alg={alg!r}")
         kid = header.get("kid")
         if not kid or not isinstance(kid, str):
-            raise TokenInvalido("el token no dice con qué clave se firmó (kid)")
+            raise TokenInvalido(SIN_KID)
         clave = self._clave(kid)
         try:
             return jwt.decode(
@@ -217,15 +248,15 @@ class VerificadorIdToken:
                 options={"require": ["exp", "iat", "iss", "aud"]},
             )
         except jwt.ExpiredSignatureError:
-            raise TokenInvalido("vencido", vencido=True) from None
+            raise TokenInvalido(VENCIDO) from None
         except jwt.InvalidAudienceError:
-            raise TokenInvalido("audiencia no aceptada") from None
+            raise TokenInvalido(AUDIENCIA) from None
         except jwt.InvalidIssuerError:
-            raise TokenInvalido("emisor no aceptado") from None
+            raise TokenInvalido(EMISOR) from None
         except jwt.InvalidSignatureError:
-            raise TokenInvalido("firma inválida") from None
+            raise TokenInvalido(FIRMA) from None
         except jwt.InvalidTokenError as exc:
-            raise TokenInvalido(f"token inválido ({type(exc).__name__})") from None
+            raise TokenInvalido(INVALIDO, detalle=type(exc).__name__) from None
 
     def emails(self, claims: dict) -> list[str]:
         """Emails que el token prueba, en el orden de `claims_email`, en minúsculas."""

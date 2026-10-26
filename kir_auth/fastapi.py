@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request, status
 
 from kir_auth.client import PlatformClient, PlatformError
 from kir_auth.models import Identity
-from kir_auth.idtoken import ErrorJWKS, TokenInvalido, VerificadorIdToken
+from kir_auth.idtoken import ErrorJWKS, TokenInvalido, VerificadorIdToken, sanear
 from kir_auth.origen import GuardaDeOrigen, nombres_de
 
 log = logging.getLogger("kir_auth")
@@ -175,13 +175,19 @@ class KirAuth:
         )
         return False
 
-    def _avisar_jwt(self, motivo: str) -> None:
+    def _avisar_jwt(self, motivo: str, detalle: str | None = None) -> None:
+        # `motivo` sale de una lista cerrada (ver kir_auth.idtoken.MOTIVOS y los
+        # literales de `_email_del_token`): el dict queda acotado y el
+        # rate-limit no se saltea variando el token. El detalle no es clave.
         ahora = time.monotonic()
         ultimo = self._jwt_avisos.get(motivo)
         if ultimo is not None and ahora - ultimo < _INTERVALO_AVISO_JWT:
             return
         self._jwt_avisos[motivo] = ahora
-        log.warning("kir_auth: ID token no válido (modo %s): %s", self.jwt_modo, motivo)
+        log.warning(
+            "kir_auth: ID token no válido (modo %s): %s%s",
+            self.jwt_modo, motivo, f" [{detalle}]" if detalle else "",
+        )
 
     def _email_del_token(self, token: str | None, email: str | None) -> tuple[str | None, str]:
         """(email, nombre del token) que vale para este pedido según el modo JWT.
@@ -192,11 +198,17 @@ class KirAuth:
         exigir = self.jwt_modo == "exigir"
         assert self.verificador_jwt is not None
 
-        def rechazo(motivo: str, codigo: int = status.HTTP_403_FORBIDDEN) -> tuple[str | None, str]:
+        def rechazo(
+            motivo: str, codigo: int = status.HTTP_403_FORBIDDEN, detalle: str | None = None
+        ) -> tuple[str | None, str]:
+            # La respuesta lleva sólo el motivo fijo; el detalle, sólo el log.
             if exigir:
-                log.warning("kir_auth: identidad rechazada por el ID token: %s", motivo)
+                log.warning(
+                    "kir_auth: identidad rechazada por el ID token: %s%s",
+                    motivo, f" [{detalle}]" if detalle else "",
+                )
                 raise HTTPException(codigo, f"identidad rechazada: {motivo}")
-            self._avisar_jwt(motivo)
+            self._avisar_jwt(motivo, detalle)
             return email, ""
 
         if not token:
@@ -207,15 +219,15 @@ class KirAuth:
             # Vencido es 401: un re-login trae un token nuevo. El resto, 403: un
             # re-login no arregla una firma o una audiencia, y sería un bucle.
             codigo = status.HTTP_401_UNAUTHORIZED if exc.vencido else status.HTTP_403_FORBIDDEN
-            return rechazo(f"token {exc.motivo}", codigo)
+            return rechazo(f"token: {exc.motivo}", codigo, exc.detalle)
         except ErrorJWKS as exc:
             if exigir:
-                log.error("kir_auth: no se puede verificar el ID token: %s", exc)
+                log.error("kir_auth: no se puede verificar el ID token: %s", sanear(exc))
                 raise HTTPException(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "no se pudo verificar la identidad con el proveedor",
                 ) from None
-            self._avisar_jwt(f"sin claves del proveedor ({exc})")
+            self._avisar_jwt("sin claves del proveedor", sanear(exc))
             return email, ""
         emails = self.verificador_jwt.emails(claims)
         if not emails:
