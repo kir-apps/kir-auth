@@ -2,6 +2,26 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
+## [0.6.0] — sin publicar
+
+**Verificación opcional del ID token del proxy** (`IDENTIDAD_JWT_MODO`,
+`IDENTIDAD_JWT_ISSUER`, `IDENTIDAD_JWT_AUDIENCIA`). Con
+`pass_authorization_header = true` en oauth2-proxy, `KirAuth` verifica el
+`Authorization: Bearer <id_token>` (firma RS256 contra el JWKS, `iss`, `aud`,
+`exp`) y exige que el email del header sea el del token. Modo `observar` para
+probarlo en producción sin rechazar a nadie. Detalle en el README.
+
+### Compatibilidad hacia atrás
+
+Apagado por default; sin la variable no cambia nada y no hace falta el extra.
+Para prenderlo, `kir-auth[jwt]` (suma PyJWT y cryptography).
+
+### Agregado
+
+- `kir_auth.VerificadorIdToken`, `TokenInvalido`, `ErrorJWKS`.
+- `KirAuth(..., verificador_jwt=..., jwt_modo=...)`.
+- Extra `jwt` en `pyproject.toml`.
+
 ## [0.5.0] — sin publicar
 
 **Guarda de origen opcional** (`IDENTIDAD_SOLO_DESDE`). Con la variable (o el

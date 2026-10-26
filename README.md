@@ -141,6 +141,62 @@ Lo que la guarda **no** cubre: quien puede crear contenedores en la red puede
 también detener el sidecar y tomar su nombre. Contra eso, la verificación del
 token firmado del proveedor de identidad.
 
+## Verificación del ID token (`IDENTIDAD_JWT_*`, opt-in)
+
+La guarda de origen depende de la red; esto no. Con
+`pass_authorization_header = true`, oauth2-proxy le manda a la app
+`Authorization: Bearer <id_token>`: el ID token que el proveedor OIDC firmó para
+esa sesión. `KirAuth` lo puede verificar —firma RS256 contra el JWKS del
+proveedor, `iss`, `aud`, `exp`/`nbf` con 60 s de margen— y exigir que el email
+del header sea el del token. **Apagado por default.** Necesita el extra `jwt`:
+
+```
+kir-auth[jwt] @ https://github.com/kir-apps/kir-auth/archive/refs/tags/v0.6.0.tar.gz
+```
+
+| Variable | Qué va |
+|---|---|
+| `IDENTIDAD_JWT_MODO` | vacía = apagado; `observar` = verifica y loguea, nunca rechaza; `exigir` = rechaza |
+| `IDENTIDAD_JWT_ISSUER` | el `iss` exacto de los tokens. En Entra ID: `https://login.microsoftonline.com/<tenant-id>/v2.0` (el del tenant, no `common`) |
+| `IDENTIDAD_JWT_AUDIENCIA` | el client id de la app registrada en el proveedor (varios, separados por coma) |
+| `IDENTIDAD_JWT_JWKS_URL` | opcional; por default sale del discovery (`<issuer>/.well-known/openid-configuration`) |
+| `IDENTIDAD_JWT_CLAIMS_EMAIL` | opcional; claims de donde sale el email, en orden. Default `email,preferred_username` |
+
+Si el sidecar ya recibe el tenant y el client id por variables, no hace falta
+cargar nada nuevo: en el `docker-compose.yml`, en el servicio de la app,
+`IDENTIDAD_JWT_ISSUER: "https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0"`
+y `IDENTIDAD_JWT_AUDIENCIA: ${ENTRA_CLIENT_ID}`.
+
+Qué responde en `exigir`, siempre que el pedido traiga identidad (header o token):
+
+| Caso | Respuesta |
+|---|---|
+| Token válido y el email del header es uno de los del token | pasa |
+| Token válido sin header de email | pasa, con el primer email del token |
+| Header sin token / token forjado / otra audiencia o emisor / el email no coincide | **403** |
+| Token vencido | **401** (un re-login trae uno nuevo) |
+| No hay claves del proveedor (ni descargadas ni en cache) | **503** |
+| Pedido sin header ni token (healthcheck, `X-Platform-Token`) | sin cambios |
+
+En `observar` el resultado es siempre el de antes; cada motivo de falla se
+loguea como `warning` a lo sumo una vez cada 5 minutos, y el primer token bueno
+como `info`. Sirve para confirmar en producción, sin riesgo, que el sidecar
+manda lo que se espera antes de pasar a `exigir`.
+
+El JWKS se cachea 6 h; un `kid` desconocido dispara una re-descarga (rotación de
+claves) con tope de una por minuto. Si el proveedor no responde, se siguen usando
+las claves cacheadas hasta 24 h después de vencidas.
+
+Del lado del sidecar hace falta:
+
+- `pass_authorization_header = true`.
+- `cookie_refresh` **menor** que la vida del ID token (en Entra, 1 h): el token
+  que se reenvía es el de la sesión, y sólo se renueva al refrescarla. Con un
+  refresh más largo, entre que el token vence y que la sesión se refresca la app
+  ve tokens vencidos (401 → re-login).
+- Que el email que pone el sidecar (`oidc_email_claim`) sea uno de los claims de
+  `IDENTIDAD_JWT_CLAIMS_EMAIL`.
+
 ## Correr local sin sidecar
 
 Para desarrollar la app sin oauth2-proxy delante, pasá `dev_email`:
