@@ -11,11 +11,13 @@ Decisiones que no se deducen del código:
 - **TTL corto (10 s) y una re-resolución antes de rechazar.** Si el proxy se
   recrea, cambia de IP; y su IP vieja puede quedar asignada a otro contenedor.
   Un cache largo seguiría aceptando headers desde la IP vieja.
-- **Un nombre que resuelve a más de una IP (de la misma familia) es ambiguo, y
+- **Un nombre que resuelve a más de una IP (de cualquier familia) es ambiguo, y
   ambiguo es rechazo.** En una red de Docker, otro contenedor puede declarar un
   alias de red con el mismo nombre que el proxy, y el nombre pasa a resolver a
   las dos IPs. Aceptar cualquiera de ellas dejaría pasar al impostor; rechazar
-  convierte la suplantación en una denegación, que se ve en el log. Si el proxy
+  convierte la suplantación en una denegación, que se ve en el log. Un proxy
+  dual-stack (una IPv4 y una IPv6) también se rechaza: es el precio de no dejar
+  que una dirección de la otra familia se cuele como confiable. Si el proxy
   comparte con la app más de una red, el nombre se califica con la red
   (`proxy.red`), que resuelve a una sola IP.
 - **Falla cerrado.** Si el nombre no resuelve (proxy caído, nombre mal escrito),
@@ -100,9 +102,10 @@ class GuardaDeOrigen:
             log.warning("kir_auth: no se pudo resolver el proxy %r: %s", nombre, exc)
             return frozenset()
         ips = {ip for ip in (_normalizar(c) for c in crudas) if ip}
-        v4 = {ip for ip in ips if ":" not in ip}
-        v6 = ips - v4
-        if len(v4) > 1 or len(v6) > 1:
+        # Más de una dirección, sea de la familia que sea, es ambiguo. Separar
+        # por familia (una v4 + una v6 = un contenedor dual-stack) dejaría que
+        # un alias de otra familia pase a ser origen confiable.
+        if len(ips) > 1:
             log.error(
                 "kir_auth: el proxy %r resuelve a varias IPs (%s); se rechaza la "
                 "identidad hasta que resuelva a una sola. ¿Otro contenedor declaró "

@@ -109,8 +109,8 @@ mal puesto sería un bucle.
 Cómo resuelve: cachea las IPs del nombre 10 s; si llega una IP que no conoce,
 re-resuelve una vez antes de rechazar (el sidecar recreado cambia de IP), con un
 tope de una re-resolución por segundo. Si el nombre no resuelve, rechaza.
-**Si el nombre resuelve a más de una IP de la misma familia, rechaza** y lo
-loguea como error: en una red de Docker otro contenedor puede declarar un alias
+**Si el nombre resuelve a más de una IP, rechaza** (de cualquier familia: un
+sidecar dual-stack con IPv4 e IPv6 también) y lo loguea como error: en una red de Docker otro contenedor puede declarar un alias
 con el mismo nombre, y aceptar cualquiera de las dos IPs dejaría pasar al
 impostor.
 
@@ -124,7 +124,8 @@ Para habilitarla en una app hay que verificar antes:
 2. **Sidecar y app comparten una sola red.** Si comparten más de una, el sidecar
    puede llegar por cualquiera; calificá el nombre con cada red
    (`<app>-oauth2.<red>`, que Docker resuelve a la IP de esa red) y listá los dos.
-3. **Una sola réplica del sidecar** (varias réplicas = varias IPs = rechazo).
+3. **Una sola réplica del sidecar y una sola dirección** (varias réplicas, o una
+   red con IPv6 habilitado que le da IPv4 e IPv6, = varias IPs = rechazo).
 4. **Uvicorn/gunicorn no confían en `X-Forwarded-For` de cualquiera.** El
    default (`--forwarded-allow-ips 127.0.0.1`) está bien. Con `*`, la IP del par
    sale de un header que manda el cliente: `KirAuth` no arranca si ve

@@ -250,10 +250,18 @@ def test_nombre_ambiguo_se_rechaza_aunque_la_ip_sea_la_del_proxy(caplog):
     assert "varias IPs" in caplog.text
 
 
-def test_una_ipv4_y_una_ipv6_del_mismo_proxy_no_son_ambiguas():
-    g, _, _ = _guarda({"proxy": [PROXY_IP, "fd00::10"]})
+def test_una_ipv4_y_una_ipv6_tambien_son_ambiguas():
+    """Separar por familia dejaría que un alias de la otra familia (un contenedor
+    dual-stack que declara el nombre del proxy) pase como origen confiable."""
+    g, _, _ = _guarda({"proxy": [PROXY_IP, "fd00::66"]})
+    assert not g.permite("fd00::66")
+    assert not g.permite(PROXY_IP)
+
+
+def test_la_misma_ip_repetida_no_es_ambigua():
+    """getaddrinfo devuelve una entrada por tipo de socket: la misma IP varias veces."""
+    g, _, _ = _guarda({"proxy": [PROXY_IP, PROXY_IP, f"::ffff:{PROXY_IP}"]})
     assert g.permite(PROXY_IP)
-    assert g.permite("fd00::10")
 
 
 def test_ipv4_mapeada_en_ipv6_se_normaliza():
@@ -278,8 +286,8 @@ def test_nombres_de():
     assert nombres_de(None) == ()
 
 
-def test_resolvedor_real_con_localhost():
-    """El resolvedor por default (getaddrinfo) sin red: localhost sale de /etc/hosts."""
-    g = GuardaDeOrigen(["localhost"])
+def test_resolvedor_real_sin_red():
+    """El resolvedor por default (getaddrinfo) con una IP literal: no sale a la red."""
+    g = GuardaDeOrigen(["127.0.0.1"])
     assert g.permite("127.0.0.1")
     assert not g.permite(OTRA_IP)

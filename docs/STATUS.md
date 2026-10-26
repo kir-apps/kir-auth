@@ -22,9 +22,14 @@ app pueda soltar su copia sin cambiar el `.env`.
 - **Un nombre ambiguo es rechazo.** Se probó en Docker 29 (2026-10-26, red de
   prueba aislada): un contenedor que declara `--network-alias <nombre-del-proxy>`
   hace que el nombre resuelva a **las dos** IPs, y una guarda que acepta
-  «cualquier IP del nombre» deja pasar al impostor. Por eso, más de una IP de la
-  misma familia = se rechaza todo y se loguea error: la suplantación pasa a ser
-  una denegación visible. También se probó que un contenedor en dos redes
+  «cualquier IP del nombre» deja pasar al impostor. Por eso, más de una IP
+  = se rechaza todo y se loguea error: la suplantación pasa a ser
+  una denegación visible. **Cualquier familia**: la primera versión separaba
+  IPv4 de IPv6 (una de cada una = un contenedor dual-stack, aceptable), y la
+  revisión de seguridad marcó que así un alias de la otra familia quedaba como
+  origen confiable. Ahora más de una dirección en total es rechazo; un proxy
+  dual-stack no se puede usar con la guarda (las redes donde corren estas apps
+  son IPv4). También se probó que un contenedor en dos redes
   compartidas resuelve a **una** IP (la de una de las redes) pero puede llegar
   por cualquiera de las dos: de ahí la recomendación de calificar `nombre.red`,
   que Docker resuelve a la IP de esa red.
