@@ -1,0 +1,3 @@
+# La bitácora sólo crece arriba: dos PRs en paralelo chocan siempre en la misma
+# línea. union la resuelve en local y en kir-automerge (kir-apps/workflow#25).
+docs/STATUS.md merge=union

@@ -2,6 +2,32 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
+## [0.5.0] — sin publicar
+
+**Guarda de origen opcional** (`IDENTIDAD_SOLO_DESDE`). Con la variable (o el
+parámetro `identidad_solo_desde`) configurada con el nombre DNS del proxy de
+autenticación, los headers de identidad (`X-Forwarded-Email`,
+`X-Auth-Request-Email`) sólo se aceptan si la IP del par TCP es la de ese proxy;
+desde otra IP, `403` sin consultar la ACL. Detalle en el README, «Guarda de
+origen».
+
+### Compatibilidad hacia atrás
+
+Sin configurar no cambia nada: se aceptan los headers como antes y se loguea un
+aviso una vez por proceso (logger `kir_auth`). Ninguna app necesita tocar código
+para actualizar. Las que la configuren tienen que revisar la lista del README
+antes de prenderla (sobre todo: nada en el medio entre proxy y app, y nadie que
+mande el header a propósito).
+
+Única forma en que esta versión puede no arrancar: guarda configurada y
+`FORWARDED_ALLOW_IPS=*` en el entorno, porque con eso la IP del par se falsea con
+un header.
+
+### Agregado
+
+- `kir_auth.GuardaDeOrigen`.
+- `KirAuth(..., identidad_solo_desde=...)`.
+
 ## [0.4.0] — 2026-09-23
 
 Primera versión que las apps pueden consumir sin perder nada: las cinco copias

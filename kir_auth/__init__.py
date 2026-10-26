@@ -5,6 +5,9 @@ que el request llegue a la app. El SDK solo:
   1. lee la identidad del header `X-Auth-Request-Email` que pone el sidecar;
   2. consulta los roles al Hub (`GET /platform/acl`, cacheado).
 
+Con `IDENTIDAD_SOLO_DESDE` configurada, el header sólo se acepta si el par TCP es
+el proxy de autenticación (ver `kir_auth.origen`).
+
 Uso típico en una mini-app FastAPI:
 
     from kir_auth import KirAuth
@@ -26,11 +29,13 @@ Uso típico en una mini-app FastAPI:
 from kir_auth.client import PlatformClient, PlatformError
 from kir_auth.fastapi import KirAuth
 from kir_auth.models import Identity
+from kir_auth.origen import GuardaDeOrigen
 
 __all__ = [
+    "GuardaDeOrigen",
     "Identity",
     "KirAuth",
     "PlatformClient",
     "PlatformError",
 ]
-__version__ = "0.4.0"
+__version__ = "0.5.0"
