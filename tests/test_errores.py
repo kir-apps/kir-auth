@@ -141,12 +141,17 @@ def test_before_send_limpia_sueldo_dni_headers_y_query():
                 "X-Forwarded-Email": "a@kir.com.ar",
                 "X-Platform-Token": "t",
                 "User-Agent": "curl",
+                "X-Auth-Request-Email": "a@kir.com.ar",
+                "X-Forwarded-User": "a",
+                "X-Forwarded-Access-Token": "t",
+                "X-Custom-Raro": "dato",
+                "Referer": "https://app.kir.test/x?monto=5",
             },
         },
         "breadcrumbs": {"values": [{"data": {"url": "http://h/p?token=1", "password": "x"}}]},
     }
     out = errores.before_send(evento)
-    assert out["message"] == "error con DNI 12.345.678? no: [dni] y [cuil]"
+    assert out["message"] == "error con DNI [dni]? no: [dni] y [cuil]"
     assert out["extra"]["detalle"]["Sueldo"] == "[Filtered]"
     assert out["extra"]["detalle"]["items"][0]["MONTO"] == "[Filtered]"
     assert out["extra"]["detalle"]["items"][1]["ok"] == "hola"
@@ -155,8 +160,7 @@ def test_before_send_limpia_sueldo_dni_headers_y_query():
     assert r["url"] == "https://app.kir.test/comp"
     assert r["query_string"] == "" and "data" not in r and "cookies" not in r
     h = r["headers"]
-    assert h["User-Agent"] == "curl"
-    assert all(h[k] == "[Filtered]" for k in ("Authorization", "Cookie", "X-Forwarded-Email", "X-Platform-Token"))
+    assert h == {"User-Agent": "curl", "Referer": "https://app.kir.test/x"}
     crumb = out["breadcrumbs"]["values"][0]["data"]
     assert crumb == {"url": "http://h/p", "password": "[Filtered]"}
 
@@ -182,3 +186,44 @@ def test_la_denylist_empaquetada_cubre_lo_pedido():
               "dni", "cuil", "cuit", "documento", "password", "token", "secret", "authorization",
               "cookie", "x-forwarded-email", "x-platform-token"):
         assert k in claves
+
+
+@pytest.mark.parametrize("crudo,esperado", [
+    ("DNI 12.345.678 ok", "DNI [dni] ok"),
+    ("DNI 12 345 678 ok", "DNI [dni] ok"),
+    ("DNI 12345678 ok", "DNI [dni] ok"),
+    ("CUIL 20-12345678-9 ok", "CUIL [cuil] ok"),
+    ("CUIL 20 12345678 9 ok", "CUIL [cuil] ok"),
+    ("CUIL 20.12345678.9 ok", "CUIL [cuil] ok"),
+    ("CUIL 20123456789 ok", "CUIL [cuil] ok"),
+    ("mail juan.perez@kir.com.ar fin", "mail [email] fin"),
+    ("pagó $ 1.234.567,50 hoy", "pagó [monto] hoy"),
+    ("pagó $1500 hoy", "pagó [monto] hoy"),
+    ("total ARS 900000 ok", "total [monto] ok"),
+    ("obra 42 en el piso 3", "obra 42 en el piso 3"),
+])
+def test_valores_por_regex(crudo, esperado):
+    assert errores.before_send({"message": crudo})["message"] == esperado
+
+
+def test_headers_por_allowlist_en_lista_de_pares():
+    ev = {"request": {"headers": [["User-Agent", "x"], ["X-Auth-Request-Email", "a@b.c"], ["Cookie", "s"]]}}
+    assert errores.before_send(ev)["request"]["headers"] == [["User-Agent", "x"]]
+
+
+def test_claves_nuevas_de_identidad():
+    ev = {"extra": {"email": "a@b.c", "x-auth-request-user": "u", "Preferred-Username": "p",
+                    "x-forwarded-user": "u", "x-forwarded-preferred-username": "p",
+                    "x-forwarded-access-token": "t", "ok": 1}}
+    out = errores.before_send(ev)["extra"]
+    assert out.pop("ok") == 1
+    assert set(out.values()) == {"[Filtered]"}
+
+
+def test_breadcrumb_de_logging_limpia_message_y_data():
+    c = errores.before_breadcrumb({
+        "category": "logging", "message": "usuario a@kir.com.ar cobró $ 1.200,5 (DNI 12.345.678)",
+        "data": {"args": "20-12345678-9", "url": "http://h/x?dni=1"},
+    })
+    assert c["message"] == "usuario [email] cobró [monto] (DNI [dni])"
+    assert c["data"] == {"args": "[cuil]", "url": "http://h/x"}

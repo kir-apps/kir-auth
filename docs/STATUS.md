@@ -21,6 +21,8 @@ parte de «no mandar nada» y agrega sólo lo necesario.
   (`1234567.5` queda `[dni].5`). Preferimos el falso positivo.
 - **`sentry-sdk` pineado exacto** (2.72.0, con más de dos semanas de publicada):
   el scrubbing depende de la forma de los eventos; la 3.x todavía es beta.
+- **Headers por allowlist, no por denylist**: una denylist deja pasar el header de identidad que nadie pensó (x-auth-request-*, x-forwarded-user...). Lo no listado se descarta.
+- **DNI/CUIL con puntos, espacios o guiones, email y montos con `$`/ARS/USD** se limpian en cualquier string (mensajes, extra, breadcrumbs de logging incluidos).
 - **No se manda `user`** ni el body ni las cookies; el sidecar pone el email en
   headers que están en la denylist.
 - El import de `sentry_sdk` es perezoso: sin el extra o sin DSN, no-op.

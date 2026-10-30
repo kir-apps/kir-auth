@@ -9,10 +9,11 @@ Sin el extra `kir-auth[errores]` o sin `GLITCHTIP_DSN`, `iniciar()` no hace nada
 Nada de lo que hace este módulo puede tumbar la app: si el SDK falla al iniciar
 se loguea un warning y la app sigue sin reporte de errores.
 
-Qué se limpia (denylist en `errores_denylist.json`, pensada para compartirse con
-Node): claves sensibles (sin distinguir mayúsculas, por substring, en cualquier
-nivel), query strings de las URLs y valores con forma de DNI/CUIL en cualquier
-string. Si el scrubbing mismo falla, el evento se DESCARTA: preferimos perder un
+Qué se limpia (`errores_denylist.json`, pensado para compartirse con Node):
+claves sensibles (sin distinguir mayúsculas, por substring, en cualquier nivel),
+query strings de las URLs y, en cualquier string, valores con forma de DNI/CUIL
+(con o sin separadores), email y montos con moneda. Los headers del request van
+por allowlist: sólo los inofensivos. Si el scrubbing mismo falla, el evento se DESCARTA: preferimos perder un
 reporte antes que mandar uno sin limpiar.
 """
 from __future__ import annotations
@@ -46,6 +47,7 @@ def cargar_denylist() -> dict[str, Any]:
             (re.compile(v["regex"]), v.get("reemplazo", "[Filtered]"))
             for v in crudo.get("valores", [])
         ),
+        "headers_permitidos": frozenset(h.lower() for h in crudo["headers_permitidos"]),
         "quitar_query": bool(crudo.get("quitar_query_string", True)),
     }
 
@@ -86,10 +88,26 @@ def _limpiar(obj: Any, cfg: dict[str, Any], nivel: int = 0) -> Any:
     return obj
 
 
-def _limpiar_request(req: dict[str, Any]) -> None:
-    # Nunca viajan bodies, cookies ni la query string completa.
+def _solo_permitidos(headers: Any, permitidos: frozenset[str]) -> Any:
+    """Allowlist: sólo viajan los headers inofensivos; el resto se descarta."""
+    if isinstance(headers, dict):
+        return {k: v for k, v in headers.items() if isinstance(k, str) and k.lower() in permitidos}
+    if isinstance(headers, (list, tuple)):
+        return [
+            [p[0], p[1]]
+            for p in headers
+            if isinstance(p, (list, tuple)) and len(p) == 2
+            and isinstance(p[0], str) and p[0].lower() in permitidos
+        ]
+    return {}
+
+
+def _limpiar_request(req: dict[str, Any], cfg: dict[str, Any]) -> None:
+    # Nunca viajan bodies, cookies ni la query string completa; headers por allowlist.
     req.pop("data", None)
     req.pop("cookies", None)
+    if "headers" in req:
+        req["headers"] = _solo_permitidos(req["headers"], cfg["headers_permitidos"])
     if "query_string" in req:
         req["query_string"] = ""
 
@@ -99,7 +117,7 @@ def limpiar_evento(event: dict[str, Any]) -> dict[str, Any]:
     cfg = cargar_denylist()
     request = event.get("request")
     if isinstance(request, dict):
-        _limpiar_request(request)
+        _limpiar_request(request, cfg)
     event.pop("user", None)
     return _limpiar(event, cfg)
 

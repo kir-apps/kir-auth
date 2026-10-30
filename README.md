@@ -227,7 +227,8 @@ iniciar("compensaciones")  # sin GLITCHTIP_DSN o sin el extra: no hace nada
 | `KIR_ENV` | entorno; default `produccion` |
 
 Sin PII, sin bodies, sin variables locales y sin trazas. Antes de enviar se
-limpia todo lo que matchea la denylist de `kir_auth/errores_denylist.json`
-(claves como sueldo, monto, dni, cuil, token, cookie; query strings; valores con
-forma de DNI/CUIL). Nunca rompe la app: si el SDK falla, loguea un warning y
+limpia con `kir_auth/errores_denylist.json`: claves sensibles (sueldo, monto, dni,
+cuil, email, token, cookie...), query strings, valores con forma de DNI/CUIL (con
+o sin separadores), email y montos con moneda; y los headers del request van por
+allowlist (user-agent, content-type, accept, host, referer sin query, x-request-id...). Nunca rompe la app: si el SDK falla, loguea un warning y
 sigue; si el scrubbing falla, el evento se descarta.
