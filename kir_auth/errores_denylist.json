@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "comentario": "Denylist compartida del scrubbing de errores (GlitchTip/Sentry). Python la lee en kir_auth.errores; pensada para que el helper de Node cargue el mismo archivo. Las claves se comparan sin distinguir mayúsculas y por substring, en cualquier nivel de anidación.",
+  "reemplazo": "[Filtered]",
+  "claves": [
+    "sueldo", "salario", "remuneracion", "bruto", "neto", "monto", "importe", "bono",
+    "dni", "cuil", "cuit", "documento",
+    "password", "token", "secret", "authorization", "cookie",
+    "x-forwarded-email", "x-platform-token"
+  ],
+  "valores": [
+    {"nombre": "cuil_cuit", "regex": "\\b\\d{2}-\\d{8}-\\d\\b", "reemplazo": "[cuil]"},
+    {"nombre": "cuil_cuit_sin_guiones", "regex": "\\b\\d{11}\\b", "reemplazo": "[cuil]"},
+    {"nombre": "dni", "regex": "\\b\\d{7,8}\\b", "reemplazo": "[dni]"}
+  ],
+  "quitar_query_string": true
+}

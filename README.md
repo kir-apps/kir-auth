@@ -204,3 +204,30 @@ Para desarrollar la app sin oauth2-proxy delante, pasá `dev_email`:
 ```python
 auth = KirAuth(..., dev_email="vos@kir.com.ar")  # None en producción
 ```
+
+## Reporte de errores a GlitchTip (`kir_auth.errores`, opt-in)
+
+Necesita el extra `errores` (`sentry-sdk`, versión exacta):
+
+```
+kir-auth[errores] @ https://github.com/kir-apps/kir-auth/archive/refs/tags/v0.7.0.tar.gz
+```
+
+En la app, antes de crear el `FastAPI()`:
+
+```python
+from kir_auth.errores import iniciar
+iniciar("compensaciones")  # sin GLITCHTIP_DSN o sin el extra: no hace nada
+```
+
+| Variable | Qué va |
+|---|---|
+| `GLITCHTIP_DSN` | DSN del proyecto. Vacía = no-op (dev y CI no mandan nada) |
+| `KIR_RELEASE` | versión/SHA desplegado; opcional |
+| `KIR_ENV` | entorno; default `produccion` |
+
+Sin PII, sin bodies, sin variables locales y sin trazas. Antes de enviar se
+limpia todo lo que matchea la denylist de `kir_auth/errores_denylist.json`
+(claves como sueldo, monto, dni, cuil, token, cookie; query strings; valores con
+forma de DNI/CUIL). Nunca rompe la app: si el SDK falla, loguea un warning y
+sigue; si el scrubbing falla, el evento se descarta.

@@ -4,6 +4,27 @@
 > Este repo es **público**: acá van decisiones de diseño de la librería, no
 > nombres de hosts, ids ni topología de ninguna instalación.
 
+## Reporte de errores con scrubbing (kir-auth#6, 2026-10-30 · risk:low)
+
+**Por qué.** Las apps manejan sueldos y DNI; un traceback con variables locales
+o una query string con filtros los lleva al servidor de errores. Por eso el helper
+parte de «no mandar nada» y agrega sólo lo necesario.
+
+**Decisiones.**
+- **Si el scrubbing falla, el evento se descarta**, no se manda sin limpiar. Se
+  pierde un reporte, no se filtra un dato.
+- **La denylist es un JSON empaquetado**, no código: el helper de Node puede
+  cargar el mismo archivo y las dos implementaciones no divergen. Las claves
+  matchean por substring y sin mayúsculas (`Sueldo_Bruto`, `monto_total`):
+  sobre-limpia a propósito; el costo es un `[Filtered]` de más.
+- **El regex de DNI (7-8 dígitos) también agarra parte de números más largos**
+  (`1234567.5` queda `[dni].5`). Preferimos el falso positivo.
+- **`sentry-sdk` pineado exacto** (2.72.0, con más de dos semanas de publicada):
+  el scrubbing depende de la forma de los eventos; la 3.x todavía es beta.
+- **No se manda `user`** ni el body ni las cookies; el sidecar pone el email en
+  headers que están en la denylist.
+- El import de `sentry_sdk` es perezoso: sin el extra o sin DSN, no-op.
+
 ## Verificación del ID token del proxy, opt-in (kir-platform#571, 2026-10-26 · risk:high)
 
 **Por qué.** La guarda de origen depende de la red: quien pueda crear
