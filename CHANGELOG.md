@@ -2,6 +2,20 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
+## [0.7.0] — sin publicar
+
+**`kir_auth.errores`: reporte de errores a GlitchTip** (compatible con el SDK de
+Sentry) con scrubbing de sueldos, montos, DNI/CUIL, headers de auth, cookies y
+query strings. Opt-in por `GLITCHTIP_DSN` y por el extra `kir-auth[errores]`
+(`sentry-sdk==2.72.0`); sin ellos no hace nada. Detalle en el README
+(kir-auth#6, kir-platform#168).
+
+### Agregado
+
+- `kir_auth.errores.iniciar(app, *, dsn, environment, release)`.
+- `kir_auth/errores_denylist.json`, pensado para compartirse con el helper de Node.
+- Extra `errores` en `pyproject.toml`.
+
 ## [0.6.0] — sin publicar
 
 **Verificación opcional del ID token del proxy** (`IDENTIDAD_JWT_MODO`,

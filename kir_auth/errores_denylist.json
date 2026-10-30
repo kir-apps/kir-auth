@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "comentario": "Denylist compartida del scrubbing de errores (GlitchTip/Sentry). Python la lee en kir_auth.errores; pensada para que el helper de Node cargue el mismo archivo. Las claves se comparan sin distinguir mayúsculas y por substring, en cualquier nivel de anidación. Los headers de request se filtran por allowlist (headers_permitidos): el resto se descarta.",
+  "reemplazo": "[Filtered]",
+  "claves": [
+    "sueldo",
+    "salario",
+    "remuneracion",
+    "bruto",
+    "neto",
+    "monto",
+    "importe",
+    "bono",
+    "dni",
+    "cuil",
+    "cuit",
+    "documento",
+    "x-forwarded-email",
+    "password",
+    "token",
+    "secret",
+    "authorization",
+    "cookie",
+    "x-platform-token",
+    "email",
+    "x-auth-request-",
+    "x-forwarded-user",
+    "x-forwarded-preferred-username",
+    "preferred-username",
+    "x-forwarded-access-token"
+  ],
+  "valores": [
+    {
+      "nombre": "cuil_cuit",
+      "regex": "\\b\\d{2}[-\\s.]?\\d{8}[-\\s.]?\\d\\b",
+      "reemplazo": "[cuil]"
+    },
+    {
+      "nombre": "monto_signo_pesos",
+      "regex": "\\$\\s?\\d[\\d.,]*",
+      "reemplazo": "[monto]"
+    },
+    {
+      "nombre": "monto_ars_usd",
+      "regex": "\\b(?:ARS|USD)\\s?\\d[\\d.,]*",
+      "reemplazo": "[monto]"
+    },
+    {
+      "nombre": "email",
+      "regex": "[A-Za-z0-9._%+\\-]+@[A-Za-z0-9\\-]+(?:\\.[A-Za-z0-9\\-]+)+",
+      "reemplazo": "[email]"
+    },
+    {
+      "nombre": "cuil_cuit_sin_separadores",
+      "regex": "\\b\\d{11}\\b",
+      "reemplazo": "[cuil]"
+    },
+    {
+      "nombre": "dni",
+      "regex": "\\b\\d{1,2}[.\\s]?\\d{3}[.\\s]?\\d{3}\\b",
+      "reemplazo": "[dni]"
+    }
+  ],
+  "quitar_query_string": true,
+  "headers_permitidos": [
+    "user-agent",
+    "content-type",
+    "accept",
+    "accept-language",
+    "content-length",
+    "host",
+    "referer",
+    "x-request-id"
+  ]
+}

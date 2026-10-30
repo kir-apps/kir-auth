@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kir-auth"
-version = "0.6.0"
+version = "0.7.0"
 description = "SDK cliente del KIR Platform Hub — identidad (oauth2-proxy) + ACL para mini-apps"
 requires-python = ">=3.11"
 dependencies = [
@@ -17,6 +17,12 @@ fastapi = ["fastapi>=0.110"]
 # Verificación del ID token del proxy (kir_auth.idtoken). Opcional: sólo la
 # necesita la app que prende IDENTIDAD_JWT_MODO.
 jwt = ["PyJWT[crypto]>=2.8"]
+# Reporte de errores a GlitchTip (kir_auth.errores). Versión exacta: el scrubbing
+# depende de la forma de los eventos del SDK.
+errores = ["sentry-sdk==2.72.0"]
 
 [tool.setuptools]
 packages = ["kir_auth"]
+
+[tool.setuptools.package-data]
+kir_auth = ["errores_denylist.json"]
