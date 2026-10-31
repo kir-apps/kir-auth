@@ -4,6 +4,47 @@
 > Este repo es **público**: acá van decisiones de diseño de la librería, no
 > nombres de hosts, ids ni topología de ninguna instalación.
 
+## Par atado a los emails que puede afirmar (kir-auth#8, 2026-10-31 · risk:high)
+
+**Por qué.** La guarda de origen validaba el par TCP, no el email que ese par
+afirma. Para el sidecar está bien (validó la sesión), pero un cliente técnico
+que entra por la red interna con identidad propia y se lista como un nombre más
+podía presentarse como cualquiera, platform admin incluido. La revisión de
+seguridad lo marcó HIGH: no hace falta que el cliente sea malicioso, alcanza con
+que el nombre esté libre (un contenedor efímero lo está casi todo el día) y
+alguien con acceso a la red lo tome.
+
+**Decisiones.**
+- **`par=email1;email2` en la misma variable**, no una variable nueva. Una
+  segunda variable (`IDENTIDAD_EMAILS_POR_PAR`) se puede olvidar o desalinear
+  con la primera, y el par quedaría sin restricción en silencio. Con todo en un
+  valor, lo que se lee es lo que se aplica. `;` separa emails porque `,` ya
+  separa pares y ni `,` ni `;` ni `=` aparecen en un email común ni en un nombre
+  DNS.
+- **Repetir un par con restricción es error, no unión.** `p=a@x,p=b@x` podría
+  ser «los dos» o «gana el último», y `p,p=a@x` peor: la entrada sin restricción
+  abriría todo. Cualquier interpretación es adivinar hacia dónde se abrió el
+  permiso. Repetir un nombre sin restricción sigue valiendo (siempre se aceptó).
+- **`par=` sin emails no arranca.** «Ningún email» y «cualquiera» son las dos
+  lecturas posibles y una de ellas abre todo.
+- **Par restringido sin header de email: 403**, aunque traiga un ID token
+  válido. En `exigir` el email puede salir del token si no hay header; si se
+  permitiera eso, la restricción dependería de que el token del par sea el
+  correcto, y el caso que la motiva es justamente uno sin token.
+- **Primer nombre que coincide, en orden.** Ya era así (`any` corta), y ahora
+  importa: el sidecar va primero y el tráfico de la gente no resuelve los demás
+  nombres. Un nombre efímero que no resuelve sólo loguea cuando viene tráfico
+  que no es del sidecar.
+- **Del email, al log sólo el dominio** (`***@dominio`), saneado. El resto del
+  SDK no loguea emails; el dominio alcanza para distinguir un intento de una
+  config vieja. El `extra` (`evento`, `motivo`, `par`, `ip`, `email`) es para que
+  un formatter JSON lo levante sin parsear el mensaje.
+- **Lo que no cubre:** si el sidecar se recrea y el par restringido se queda con
+  su IP vieja dentro de los 10 s del cache, ese par se trata como el sidecar
+  hasta la próxima resolución. Es el mismo riesgo de reuso de IP que ya acepta
+  la guarda, acotado por el TTL, y exige poder crear contenedores en la red. Lo
+  cierra el ID token, no la red.
+
 ## Reporte de errores con scrubbing (kir-auth#6, 2026-10-30 · risk:low)
 
 **Por qué.** Las apps manejan sueldos y DNI; un traceback con variables locales

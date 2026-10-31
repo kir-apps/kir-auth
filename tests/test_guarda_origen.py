@@ -6,7 +6,10 @@ Lo que se fija:
 - sin configurar, el comportamiento es el de antes y hay un aviso, una vez;
 - la resolución DNS: TTL, re-resolución si el proxy cambió de IP (con tope),
   falla cerrado si no resuelve, y rechazo si el nombre es ambiguo (alias de red
-  repetido en Docker).
+  repetido en Docker);
+- un par atado a emails (`par=email1;email2`, kir-auth#8) sólo puede afirmar
+  esos: otro email es 403 sin consultar la ACL, el chequeo de par va primero,
+  y una config que no se entiende no deja arrancar.
 
 Corre con pytest (`pytest tests/`). Sin red: el resolvedor DNS se inyecta.
 """
@@ -20,10 +23,12 @@ from starlette.requests import Request
 
 import kir_auth.fastapi as kfa
 from kir_auth import KirAuth
-from kir_auth.origen import GuardaDeOrigen, nombres_de
+from kir_auth.origen import GuardaDeOrigen, nombres_de, pares_de
 
 PROXY_IP = "172.18.0.10"
 OTRA_IP = "172.18.0.66"
+BARRIDO_IP = "172.18.0.20"
+BARRIDO_EMAIL = "barrido@example.com"
 ACL = {"email": "a@example.com", "name": "A", "is_platform_admin": False,
        "roles": ["editor"], "known": True}
 
@@ -291,3 +296,266 @@ def test_resolvedor_real_sin_red():
     g = GuardaDeOrigen(["127.0.0.1"])
     assert g.permite("127.0.0.1")
     assert not g.permite(OTRA_IP)
+
+
+# ── par atado a emails (kir-auth#8) ──────────────────────────────────────────
+# El caso: el sidecar afirma cualquier email (validó la sesión); un cliente
+# técnico que llega por la red interna con su propia identidad (un barrido)
+# sólo puede afirmar la suya, no la de un platform admin.
+
+CON_BARRIDO = f"demo-oauth2,barrido={BARRIDO_EMAIL}"
+
+
+def _dns_con_barrido() -> _DNS:
+    return _DNS({"demo-oauth2": [PROXY_IP], "barrido": [BARRIDO_IP]})
+
+
+def _auth_barrido(monkeypatch, **kw) -> KirAuth:
+    return _auth(monkeypatch, dns=_dns_con_barrido(), identidad_solo_desde=CON_BARRIDO, **kw)
+
+
+@pytest.mark.parametrize("email", ["a@example.com", "jefe@example.com", BARRIDO_EMAIL])
+def test_desde_el_sidecar_pasa_cualquier_email(monkeypatch, email):
+    """Caso 1 de la card: el par sin restricción afirma cualquiera, como siempre."""
+    auth = _auth_barrido(monkeypatch)
+    user = auth.require_login(_request(PROXY_IP, {"X-Forwarded-Email": email}))
+    assert user.email == email
+
+
+@pytest.mark.parametrize("email", [BARRIDO_EMAIL, "  Barrido@EXAMPLE.com ", "BARRIDO@example.com"])
+def test_desde_el_barrido_su_email_pasa(monkeypatch, email):
+    """Caso 2: el par restringido con su email pasa, sin distinguir mayúsculas
+    ni espacios alrededor."""
+    auth = _auth_barrido(monkeypatch)
+    user = auth.require_login(_request(BARRIDO_IP, {"X-Forwarded-Email": email}))
+    assert user.email.strip().lower() == BARRIDO_EMAIL
+    assert len(auth.llamadas_acl) == 1
+
+
+@pytest.mark.parametrize("header", ["X-Forwarded-Email", "X-Auth-Request-Email"])
+def test_desde_el_barrido_otro_email_es_403_sin_acl_y_con_log(monkeypatch, caplog, header):
+    """Caso 3: otro email desde el par restringido es 403, no llega a la ACL, y
+    el log dice el par y el dominio pero no la parte local del email."""
+    auth = _auth_barrido(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="kir_auth"):
+        with pytest.raises(HTTPException) as exc:
+            auth.require_login(_request(BARRIDO_IP, {header: "jefe.admin@example.com"}))
+    assert exc.value.status_code == 403
+    assert "jefe" not in exc.value.detail
+    assert auth.llamadas_acl == []
+    registro = [r for r in caplog.records if getattr(r, "motivo", None)
+                == "email_no_permitido_para_el_par"]
+    assert len(registro) == 1
+    r = registro[0]
+    assert (r.evento, r.par, r.ip, r.email) == (
+        "identidad_rechazada", "barrido", BARRIDO_IP, "***@example.com")
+    assert "jefe.admin" not in caplog.text
+    assert "barrido" in r.getMessage()
+
+
+def test_desde_el_barrido_require_role_y_optional_user_tambien(monkeypatch):
+    auth = _auth_barrido(monkeypatch)
+    falso = _request(BARRIDO_IP, {"X-Forwarded-Email": "jefe@example.com"})
+    with pytest.raises(HTTPException) as exc:
+        auth.require_role("editor")(falso)
+    assert exc.value.status_code == 403
+    assert auth.optional_user(falso) is None
+    assert auth.llamadas_acl == []
+
+
+def test_desde_el_barrido_el_email_que_se_usa_es_el_que_se_chequeo(monkeypatch):
+    """Con los dos headers, el que cuenta es X-Forwarded-Email: es el que se
+    chequea y el que va a la ACL. El otro no se cuela."""
+    auth = _auth_barrido(monkeypatch)
+    user = auth.require_login(_request(BARRIDO_IP, {
+        "X-Forwarded-Email": BARRIDO_EMAIL, "X-Auth-Request-Email": "jefe@example.com"}))
+    assert user.email == BARRIDO_EMAIL
+    assert auth.llamadas_acl == [BARRIDO_EMAIL]
+
+
+def test_el_chequeo_de_par_va_primero(monkeypatch, caplog):
+    """Desde una IP que no es de ningún par, el email permitido del barrido no
+    alcanza: es 403 por el par, no pasa por ser un email conocido."""
+    auth = _auth_barrido(monkeypatch)
+    with caplog.at_level(logging.WARNING, logger="kir_auth"):
+        with pytest.raises(HTTPException) as exc:
+            auth.require_login(_request(OTRA_IP, {"X-Forwarded-Email": BARRIDO_EMAIL}))
+    assert exc.value.status_code == 403
+    assert "no vino del proxy" in exc.value.detail
+    assert auth.llamadas_acl == []
+    motivos = [getattr(r, "motivo", None) for r in caplog.records]
+    assert motivos == ["par_no_confiable"]
+
+
+def test_el_sidecar_primero_no_resuelve_al_barrido(monkeypatch):
+    """Los nombres se prueban en orden y se corta en el primero: el tráfico de
+    la gente nunca consulta el DNS del barrido, que no existe la mayor parte
+    del día."""
+    dns = _DNS({"demo-oauth2": [PROXY_IP]})  # el barrido no está corriendo
+    consultados: list[str] = []
+
+    def resolver(nombre):
+        consultados.append(nombre)
+        return dns(nombre)
+
+    auth = _auth(monkeypatch, dns=resolver, identidad_solo_desde=CON_BARRIDO)
+    for _ in range(3):
+        auth.require_login(_request(PROXY_IP, {"X-Forwarded-Email": "a@example.com"}))
+    assert consultados == ["demo-oauth2"]
+    # Y si el barrido no resuelve, desde su IP se falla cerrado.
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(_request(BARRIDO_IP, {"X-Forwarded-Email": BARRIDO_EMAIL}))
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Forwarded-Email": ""}, {"X-Forwarded-Email": "  "}])
+def test_email_vacio_desde_el_barrido_no_es_identidad(monkeypatch, headers):
+    """Sin email (o vacío) no hay identidad que afirmar: no llega a la ACL ni
+    cae a dev_email con otro nombre."""
+    auth = _auth_barrido(monkeypatch)
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(_request(BARRIDO_IP, headers))
+    # Sin header o vacío: 401 (no hay identidad); sólo espacios: 403 (el par no
+    # puede afirmar un email vacío). En ningún caso se consulta la ACL.
+    assert exc.value.status_code == (403 if headers.get("X-Forwarded-Email") else 401)
+    assert auth.llamadas_acl == []
+
+
+class _VerificadorFalso:
+    """Verificador de ID token que da por bueno cualquier token (con el email del
+    platform admin): muestra que la restricción del par no se saltea por token."""
+
+    def verificar(self, token):
+        return {"email": "jefe@example.com", "name": "Jefe"}
+
+    def emails(self, claims):
+        return [claims["email"]]
+
+
+def test_par_restringido_sin_header_de_email_con_token_es_403(monkeypatch):
+    """Un par restringido que no manda email pero sí un token no puede tomar el
+    email del token: la restricción se mira antes, y sin email es 403."""
+    auth = _auth_barrido(monkeypatch, verificador_jwt=_VerificadorFalso(), jwt_modo="exigir")
+    req = _request(BARRIDO_IP, {"Authorization": "Bearer x.y.z"})
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(req)
+    assert exc.value.status_code == 403
+    assert auth.llamadas_acl == []
+    # Desde el sidecar, el mismo pedido pasa con el email del token (lo de siempre).
+    assert auth.require_login(
+        _request(PROXY_IP, {"Authorization": "Bearer x.y.z"})).email == "jefe@example.com"
+
+
+def test_varios_emails_por_par(monkeypatch):
+    auth = _auth(monkeypatch, dns=_dns_con_barrido(),
+                 identidad_solo_desde="demo-oauth2, barrido = uno@example.com ; Dos@Example.com ;")
+    for email in ("uno@example.com", "dos@example.com"):
+        assert auth.require_login(_request(BARRIDO_IP, {"X-Forwarded-Email": email}))
+    with pytest.raises(HTTPException) as exc:
+        auth.require_login(_request(BARRIDO_IP, {"X-Forwarded-Email": "tres@example.com"}))
+    assert exc.value.status_code == 403
+
+
+def test_restriccion_desde_el_entorno(monkeypatch):
+    monkeypatch.setenv("IDENTIDAD_SOLO_DESDE", CON_BARRIDO)
+    auth = _auth(monkeypatch, dns=_dns_con_barrido())
+    assert auth.guarda.nombres == ("demo-oauth2", "barrido")
+    assert auth.guarda.emails_permitidos("demo-oauth2") is None
+    assert auth.guarda.emails_permitidos("barrido") == frozenset({BARRIDO_EMAIL})
+    with pytest.raises(HTTPException):
+        auth.require_login(_request(BARRIDO_IP, {"X-Forwarded-Email": "jefe@example.com"}))
+
+
+def test_restriccion_en_codigo_como_lista_o_dict(monkeypatch):
+    for config in ([" demo-oauth2", f"barrido={BARRIDO_EMAIL}"],
+                   {"demo-oauth2": None, "barrido": [BARRIDO_EMAIL]},
+                   {"demo-oauth2": None, "barrido": BARRIDO_EMAIL}):
+        auth = _auth(monkeypatch, dns=_dns_con_barrido(), identidad_solo_desde=config)
+        assert auth.guarda.pares == {"demo-oauth2": None,
+                                     "barrido": frozenset({BARRIDO_EMAIL})}, config
+
+
+# ── la config: compatibilidad y falla cerrado ────────────────────────────────
+
+@pytest.mark.parametrize("valor, esperado", [
+    ("demo-oauth2", {"demo-oauth2": None}),
+    (" p1 , p2 ,", {"p1": None, "p2": None}),
+    ("a, b,a,,", {"a": None, "b": None}),
+    ("p.red1,p.red2", {"p.red1": None, "p.red2": None}),
+    ("127.0.0.1", {"127.0.0.1": None}),
+    ("A,a", {"A": None, "a": None}),
+    ("", {}),
+    ("  , ,", {}),
+])
+def test_sintaxis_de_antes_sin_cambios(valor, esperado):
+    """Compatibilidad hacia atrás: la lista de nombres de siempre se parsea igual
+    y ningún par queda restringido."""
+    assert pares_de(valor) == esperado
+    assert nombres_de(valor) == tuple(esperado)
+
+
+def test_par_sin_restriccion_repetido_se_cuenta_una_vez():
+    assert pares_de("demo-oauth2,barrido=x@d.com,demo-oauth2") == {
+        "demo-oauth2": None, "barrido": frozenset({"x@d.com"})}
+
+
+@pytest.mark.parametrize("valor", [
+    "barrido=x@d.com,barrido=y@d.com",      # ¿se suman o gana una?
+    "barrido=x@d.com,barrido",              # la sin restricción abriría todo
+    "barrido,barrido=x@d.com",
+    "barrido=x@d.com,BARRIDO=x@d.com",      # DNS no distingue mayúsculas
+    "Barrido,barrido=x@d.com",
+])
+def test_par_repetido_con_restriccion_no_arranca(monkeypatch, valor):
+    with pytest.raises(ValueError, match="más de una vez"):
+        pares_de(valor)
+    monkeypatch.setenv("IDENTIDAD_SOLO_DESDE", valor)
+    with pytest.raises(ValueError):
+        _auth(monkeypatch)
+
+
+@pytest.mark.parametrize("valor", [
+    "demo-oauth2,barrido=",                 # '=' sin emails: ¿nadie o cualquiera?
+    "demo-oauth2,barrido= ; ;",
+    "demo-oauth2,=x@d.com",                 # emails sin par
+    "demo-oauth2,barrido=no-es-un-email",
+    "demo-oauth2,barrido=@d.com",
+    "demo-oauth2,barrido=x@",
+    "demo-oauth2,barrido=x@d.com@e.com",
+    "demo-oauth2,barrido=x@d.com=y@d.com",
+    "demo-oauth2,barrido=x @d.com",
+    "demo-oauth2,x@d.com",                  # un email donde va un par
+    "demo-oauth2,barrido x@d.com",
+    "demo-oauth2;barrido",                  # separador de emails entre pares
+])
+def test_config_mal_escrita_no_arranca(monkeypatch, valor):
+    """Caso 4 de la card: no se interpreta, no se ignora: ValueError al
+    construir KirAuth, sea por entorno o por parámetro."""
+    with pytest.raises(ValueError, match="IDENTIDAD_SOLO_DESDE"):
+        _auth(monkeypatch, identidad_solo_desde=valor)
+    monkeypatch.setenv("IDENTIDAD_SOLO_DESDE", valor)
+    with pytest.raises(ValueError, match="IDENTIDAD_SOLO_DESDE"):
+        _auth(monkeypatch)
+
+
+@pytest.mark.parametrize("config", [
+    {"barrido": ""},
+    {"barrido": []},
+    {"": "x@d.com"},
+    ["demo-oauth2", 5],
+])
+def test_config_en_codigo_mal_escrita_no_arranca(config):
+    with pytest.raises(ValueError):
+        GuardaDeOrigen(config)
+
+
+def test_guarda_puede_afirmar():
+    g = GuardaDeOrigen(CON_BARRIDO, resolver=_dns_con_barrido())
+    assert g.par(PROXY_IP) == "demo-oauth2"
+    assert g.par(BARRIDO_IP) == "barrido"
+    assert g.par(OTRA_IP) is None
+    assert g.puede_afirmar("demo-oauth2", "cualquiera@example.com")
+    assert g.puede_afirmar("barrido", " BARRIDO@example.com")
+    assert not g.puede_afirmar("barrido", "jefe@example.com")
+    assert not g.puede_afirmar("barrido", None)
+    assert not g.puede_afirmar("barrido", "")

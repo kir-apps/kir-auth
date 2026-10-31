@@ -15,7 +15,7 @@ from fastapi import HTTPException, Request, status
 from kir_auth.client import PlatformClient, PlatformError
 from kir_auth.models import Identity
 from kir_auth.idtoken import ErrorJWKS, TokenInvalido, VerificadorIdToken, sanear
-from kir_auth.origen import GuardaDeOrigen, nombres_de
+from kir_auth.origen import GuardaDeOrigen, pares_de
 
 log = logging.getLogger("kir_auth")
 
@@ -74,6 +74,14 @@ def _verificador_del_entorno() -> VerificadorIdToken | None:
     )
 
 
+def _enmascarar(email: str | None) -> str:
+    """Para el log: el dominio del email, nunca la parte local (`***@dominio`)."""
+    if not email:
+        return "(sin email)"
+    _, arroba, dominio = email.strip().rpartition("@")
+    return f"***@{sanear(dominio)}" if arroba else "***"
+
+
 def _bearer(request: Request) -> str | None:
     valor = request.headers.get("authorization", "")
     esquema, _, token = valor.partition(" ")
@@ -110,7 +118,11 @@ class KirAuth:
                    es la de ese proxy; si no, 403. Por default sale de la
                    variable de entorno IDENTIDAD_SOLO_DESDE (separada por comas);
                    `None` explícito la apaga. Sin configurar, el comportamiento
-                   es el de siempre y se loguea un aviso una vez.
+                   es el de siempre y se loguea un aviso una vez. Un par se
+                   puede atar a los emails que puede afirmar con
+                   `par=email1;email2`: desde ese par, otro email es 403. La
+                   forma completa, en `kir_auth.origen.pares_de`; si no se
+                   entiende, ValueError (la app no arranca).
         verificador_jwt / jwt_modo: verificación del ID token que el proxy manda
                    en `Authorization: Bearer` (ver kir_auth.idtoken). Apagada por
                    default. Por default salen del entorno: IDENTIDAD_JWT_MODO
@@ -127,8 +139,10 @@ class KirAuth:
 
         if identidad_solo_desde is _DEL_ENTORNO:
             identidad_solo_desde = os.environ.get(ENV_SOLO_DESDE, "")
-        nombres = nombres_de(identidad_solo_desde)  # type: ignore[arg-type]
-        self.guarda: GuardaDeOrigen | None = GuardaDeOrigen(nombres) if nombres else None
+        # Una config mal escrita tira ValueError acá: la app no arranca, en vez
+        # de arrancar con un permiso que nadie quiso dar.
+        pares = pares_de(identidad_solo_desde)  # type: ignore[arg-type]
+        self.guarda: GuardaDeOrigen | None = GuardaDeOrigen(pares) if pares else None
         if self.guarda is None:
             _avisar_sin_guarda()
         elif _forwarded_allow_ips_abierto():
@@ -161,19 +175,45 @@ class KirAuth:
                 ENV_SOLO_DESDE,
             )
 
-    def _origen_valido(self, request: Request) -> bool:
+    def _verificar_origen(self, request: Request, email: str | None) -> None:
+        """403 si el par no es confiable, o si lo es pero no puede afirmar `email`.
+
+        403 y no 401: un 401 hace que algunos frontends manden a re-loguear, y si
+        la guarda rechaza a todos (nombre mal configurado) eso sería un bucle.
+        """
         if self.guarda is None:
-            return True
+            return
         ip = request.client.host if request.client else None
-        if self.guarda.permite(ip):
-            return True
-        log.warning(
-            "kir_auth: identidad rechazada; el pedido trae headers de identidad "
-            "pero vino de %s, no del proxy (%s).",
-            ip,
-            ", ".join(self.guarda.nombres),
-        )
-        return False
+        par = self.guarda.par(ip)
+        if par is None:
+            log.warning(
+                "kir_auth: identidad rechazada; el pedido trae headers de identidad "
+                "pero vino de %s, no del proxy (%s).",
+                ip,
+                ", ".join(self.guarda.nombres),
+                extra={"evento": "identidad_rechazada", "motivo": "par_no_confiable",
+                       "ip": ip},
+            )
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "identidad rechazada: el pedido no vino del proxy de autenticación",
+            )
+        if not self.guarda.puede_afirmar(par, email):
+            # El email no va entero al log (como en el resto del SDK): sólo el
+            # dominio, que alcanza para ver si es un intento o una config vieja.
+            dominio = _enmascarar(email)
+            log.warning(
+                "kir_auth: identidad rechazada; el par %r no puede afirmar %s.",
+                par,
+                dominio,
+                extra={"evento": "identidad_rechazada",
+                       "motivo": "email_no_permitido_para_el_par",
+                       "par": par, "ip": ip, "email": dominio},
+            )
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "identidad rechazada: ese origen no puede afirmar esa identidad",
+            )
 
     def _avisar_jwt(self, motivo: str, detalle: str | None = None) -> None:
         # `motivo` sale de una lista cerrada (ver kir_auth.idtoken.MOTIVOS y los
@@ -251,16 +291,14 @@ class KirAuth:
             or request.headers.get("x-auth-request-user")
             or ""
         )
-        # Los headers de identidad sólo valen si los puso el proxy. 403 y no 401:
-        # un 401 hace que algunos frontends manden a re-loguear, y si la guarda
-        # rechaza a todos (nombre mal configurado) eso sería un bucle. Tampoco se
-        # cae a dev_email: un header falso nunca se convierte en otra identidad.
+        # Los headers de identidad sólo valen si los puso un par confiable, y
+        # ese par sólo puede afirmar los emails que tiene permitidos (un par
+        # restringido sin header de email también es 403: el email del token no
+        # lo reemplaza). Primero el par, después el email. Tampoco se cae a
+        # dev_email: un header falso nunca se convierte en otra identidad.
         token = _bearer(request) if self.verificador_jwt is not None else None
-        if (email or token) and not self._origen_valido(request):
-            raise HTTPException(
-                status.HTTP_403_FORBIDDEN,
-                "identidad rechazada: el pedido no vino del proxy de autenticación",
-            )
+        if email or token:
+            self._verificar_origen(request, email)
         # El ID token firmado por el proveedor: con él, un header forjado no
         # alcanza aunque el pedido llegue al puerto de la app. Sólo se mira si
         # el pedido dice traer identidad; los que no (healthchecks, llamadas con

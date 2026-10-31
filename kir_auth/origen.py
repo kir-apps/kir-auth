@@ -22,6 +22,18 @@ Decisiones que no se deducen del código:
   (`proxy.red`), que resuelve a una sola IP.
 - **Falla cerrado.** Si el nombre no resuelve (proxy caído, nombre mal escrito),
   ningún pedido con headers de identidad pasa.
+- **Un par puede quedar atado a los emails que puede afirmar**
+  (`nombre=email1;email2`). El sidecar valida la sesión y puede afirmar
+  cualquiera; un cliente técnico que manda su propia identidad (un barrido, un
+  monitor) no tiene por qué poder presentarse como otra persona. Sin `=`, el par
+  afirma cualquier email, como siempre.
+- **Los nombres se prueban en orden y gana el primero que coincide.** El sidecar
+  va primero: el tráfico de la gente nunca resuelve los nombres que siguen, que
+  pueden no existir la mayor parte del día.
+- **Una config que no se entiende no arranca.** Un par con `=` y sin emails, un
+  email sin `@`, o el mismo par listado dos veces con restricción tiran
+  `ValueError` al construir: interpretarlos de alguna manera sería adivinar en
+  qué dirección se abrió el permiso.
 
 Supuesto del que depende: `request.client.host` tiene que ser la IP real del
 socket. Uvicorn y gunicorn la reemplazan por la de `X-Forwarded-For` cuando el
@@ -35,11 +47,18 @@ import ipaddress
 import logging
 import socket
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 
 log = logging.getLogger("kir_auth")
 
 Resolvedor = Callable[[str], Iterable[str]]
+# par -> emails que puede afirmar (normalizados), o None = cualquiera.
+Pares = dict[str, frozenset[str] | None]
+ConfigPares = str | Iterable[str] | Mapping[str, str | Iterable[str] | None]
+
+SEPARADOR_PARES = ","
+SEPARADOR_PAR_EMAILS = "="
+SEPARADOR_EMAILS = ";"
 
 
 def resolver_dns(nombre: str) -> set[str]:
@@ -58,32 +77,135 @@ def _normalizar(ip: str) -> str | None:
     return str(direccion)
 
 
-def nombres_de(valor: str | Iterable[str] | None) -> tuple[str, ...]:
-    """`"a, b"` o `["a", "b"]` → `("a", "b")`, sin vacíos ni repetidos."""
-    if valor is None:
-        return ()
-    partes = valor.split(",") if isinstance(valor, str) else list(valor)
-    vistos: list[str] = []
+def normalizar_email(email: str) -> str:
+    """Forma en que se comparan los emails: sin espacios alrededor y en minúsculas."""
+    return email.strip().lower()
+
+
+def _email_valido(email: str) -> bool:
+    local, arroba, dominio = email.partition("@")
+    return bool(
+        arroba
+        and local
+        and dominio
+        and "@" not in dominio
+        and not any(c.isspace() or c in ",;=" for c in email)
+    )
+
+
+def _nombre_valido(nombre: str) -> bool:
+    return not any(c.isspace() or c in "@;=" for c in nombre)
+
+
+def _emails_de(nombre: str, crudo: str | Iterable[str]) -> frozenset[str]:
+    partes = crudo.split(SEPARADOR_EMAILS) if isinstance(crudo, str) else list(crudo)
+    emails: set[str] = set()
     for parte in partes:
-        nombre = parte.strip()
-        if nombre and nombre not in vistos:
-            vistos.append(nombre)
-    return tuple(vistos)
+        if not isinstance(parte, str):
+            raise ValueError(f"IDENTIDAD_SOLO_DESDE: el par {nombre!r} tiene un email que no es texto")
+        email = normalizar_email(parte)
+        if not email:
+            continue
+        if not _email_valido(email):
+            raise ValueError(
+                f"IDENTIDAD_SOLO_DESDE: {email!r} (par {nombre!r}) no es un email válido"
+            )
+        emails.add(email)
+    if not emails:
+        # `par=` sin emails: ¿nadie o cualquiera? Ninguna de las dos es segura de
+        # suponer, así que no se arranca.
+        raise ValueError(
+            f"IDENTIDAD_SOLO_DESDE: el par {nombre!r} tiene '=' pero ningún email; "
+            f"poné los emails separados por '{SEPARADOR_EMAILS}' o sacá el '='"
+        )
+    return frozenset(emails)
+
+
+def pares_de(valor: ConfigPares | None) -> Pares:
+    """Parsea la config de la guarda: par -> emails que puede afirmar.
+
+    `"a, b=x@d;y@d"` → `{"a": None, "b": frozenset({"x@d", "y@d"})}`, en el orden
+    en que vinieron. También acepta una lista de esas entradas o un dict
+    `{par: None | "x@d;y@d" | [emails]}`. Sin `=` el par afirma cualquier email.
+    Vacíos se ignoran y un par sin restricción repetido se cuenta una vez (como
+    antes de que hubiera restricciones). Tira `ValueError` si algo no se
+    entiende: par sin nombre, `=` sin emails, email sin `@`, o el mismo par
+    (sin distinguir mayúsculas) dos veces con alguna restricción.
+    """
+    if valor is None:
+        return {}
+    entradas: list[tuple[str, str | Iterable[str] | None]] = []
+    if isinstance(valor, Mapping):
+        entradas = list(valor.items())
+    else:
+        partes = valor.split(SEPARADOR_PARES) if isinstance(valor, str) else list(valor)
+        for parte in partes:
+            if not isinstance(parte, str):
+                raise ValueError(f"IDENTIDAD_SOLO_DESDE: entrada que no es texto: {parte!r}")
+            if not parte.strip():
+                continue
+            nombre, igual, emails = parte.partition(SEPARADOR_PAR_EMAILS)
+            entradas.append((nombre, emails if igual else None))
+
+    pares: Pares = {}
+    for nombre_crudo, emails_crudos in entradas:
+        if not isinstance(nombre_crudo, str):
+            raise ValueError(f"IDENTIDAD_SOLO_DESDE: par que no es texto: {nombre_crudo!r}")
+        nombre = nombre_crudo.strip()
+        if not nombre:
+            if emails_crudos is None:
+                continue
+            raise ValueError("IDENTIDAD_SOLO_DESDE: hay emails sin nombre de par ('=...')")
+        if not _nombre_valido(nombre):
+            raise ValueError(
+                f"IDENTIDAD_SOLO_DESDE: {nombre!r} no es un nombre de par; la forma es "
+                f"'par' o 'par=email{SEPARADOR_EMAILS}email', separados por '{SEPARADOR_PARES}'"
+            )
+        emails = None if emails_crudos is None else _emails_de(nombre, emails_crudos)
+        # DNS no distingue mayúsculas: `Barrido` y `barrido` son el mismo par.
+        previos = [n for n in pares if n.lower() == nombre.lower()]
+        if previos:
+            if emails is None and all(pares[n] is None for n in previos):
+                # Repetido sin restricción: el comportamiento de siempre.
+                pares.setdefault(nombre, None)
+                continue
+            # Repetido con restricción en alguna de las dos: ¿se suman, gana una,
+            # la de sin restricción abre todo? No se adivina.
+            raise ValueError(
+                f"IDENTIDAD_SOLO_DESDE: el par {nombre!r} está más de una vez y con "
+                f"restricción de emails; listalo una sola vez con todos sus emails "
+                f"separados por '{SEPARADOR_EMAILS}'"
+            )
+        pares[nombre] = emails
+    return pares
+
+
+def nombres_de(valor: ConfigPares | None) -> tuple[str, ...]:
+    """`"a, b"` o `["a", "b"]` → `("a", "b")`, sin vacíos ni repetidos.
+
+    Con restricciones (`"a,b=x@d"`) devuelve sólo los nombres de par.
+    """
+    return tuple(pares_de(valor))
 
 
 class GuardaDeOrigen:
-    """Decide si una IP de origen es la del proxy de autenticación."""
+    """Decide si una IP de origen es la de un par confiable, y qué puede afirmar.
+
+    `nombres` es la config de `pares_de`: nombres sueltos (afirman cualquier
+    email) o `par=email1;email2` (sólo esos).
+    """
 
     def __init__(
         self,
-        nombres: Iterable[str],
+        nombres: ConfigPares,
         *,
         ttl_seconds: float = 10.0,
         min_reresolucion_seconds: float = 1.0,
         resolver: Resolvedor | None = None,
         reloj: Callable[[], float] = time.monotonic,
     ) -> None:
-        self.nombres = nombres_de(nombres)
+        self.pares: Pares = pares_de(nombres)
+        self.nombres: tuple[str, ...] = tuple(self.pares)
         if not self.nombres:
             raise ValueError("GuardaDeOrigen necesita al menos un nombre de proxy")
         self._ttl = ttl_seconds
@@ -129,12 +251,36 @@ class GuardaDeOrigen:
         self._cache[nombre] = (ahora, ips)
         return ips
 
-    def permite(self, ip: str | None) -> bool:
-        """True si `ip` es la de alguno de los proxies configurados."""
+    def par(self, ip: str | None) -> str | None:
+        """El primer par configurado (en orden) cuya IP es `ip`, o None.
+
+        Corta en el primero que coincide: los nombres que siguen no se resuelven.
+        """
         ip = _normalizar(ip) if ip else None
         if not ip:
-            return False
-        if any(ip in self._ips(n, forzar=False) for n in self.nombres):
-            return True
+            return None
+        for nombre in self.nombres:
+            if ip in self._ips(nombre, forzar=False):
+                return nombre
         # El proxy pudo recrearse con otra IP: una re-resolución antes de rechazar.
-        return any(ip in self._ips(n, forzar=True) for n in self.nombres)
+        for nombre in self.nombres:
+            if ip in self._ips(nombre, forzar=True):
+                return nombre
+        return None
+
+    def permite(self, ip: str | None) -> bool:
+        """True si `ip` es la de alguno de los pares configurados."""
+        return self.par(ip) is not None
+
+    def emails_permitidos(self, par: str) -> frozenset[str] | None:
+        """Los emails que `par` puede afirmar (normalizados), o None = cualquiera."""
+        return self.pares[par]
+
+    def puede_afirmar(self, par: str, email: str | None) -> bool:
+        """True si `par` puede afirmar `email`. Un par restringido sin email, no."""
+        permitidos = self.pares[par]
+        if permitidos is None:
+            return True
+        if not email:
+            return False
+        return normalizar_email(email) in permitidos

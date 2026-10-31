@@ -2,6 +2,31 @@
 
 Todos los cambios notables de este paquete se documentan acá.
 
+## [0.8.0] — sin publicar
+
+**Guarda de origen: un par puede quedar atado a los emails que puede afirmar**
+(kir-auth#8, kir-platform#571). `IDENTIDAD_SOLO_DESDE=<app>-oauth2,<par>=email`
+(varios emails separados por `;`): desde ese par, otro email es `403` y no se
+consulta la ACL, con un `warning` estructurado que lleva el par, la IP y sólo el
+dominio del email. Un par sin `=` sigue afirmando cualquier email. Detalle en el
+README, «Atar un par a los emails que puede afirmar».
+
+### Compatibilidad hacia atrás
+
+La lista de nombres de siempre se parsea igual y ningún par queda restringido;
+sin la variable no cambia nada. Lo único que antes arrancaba y ahora no: un
+valor que no se entiende (`par=` sin emails, `=email` sin par, un email donde va
+un nombre, el mismo par dos veces con restricción). Un nombre con `@`, `;`, `=` o
+espacios nunca resolvió por DNS, así que con la versión anterior esa app ya
+rechazaba toda identidad; ahora no arranca y lo dice.
+
+### Agregado
+
+- `kir_auth.origen.pares_de` (el parser) y, en `GuardaDeOrigen`, `pares`,
+  `par(ip)`, `emails_permitidos(par)` y `puede_afirmar(par, email)`.
+- `identidad_solo_desde` acepta además un dict `{par: None | emails}`.
+- El rechazo por par no confiable también lleva `extra` (`evento`, `motivo`, `ip`).
+
 ## [0.7.0] — sin publicar
 
 **`kir_auth.errores`: reporte de errores a GlitchTip** (compatible con el SDK de
@@ -16,7 +41,7 @@ query strings. Opt-in por `GLITCHTIP_DSN` y por el extra `kir-auth[errores]`
 - `kir_auth/errores_denylist.json`, pensado para compartirse con el helper de Node.
 - Extra `errores` en `pyproject.toml`.
 
-## [0.6.0] — sin publicar
+## [0.6.0] — 2026-10-26, tag `v0.6.0`
 
 **Verificación opcional del ID token del proxy** (`IDENTIDAD_JWT_MODO`,
 `IDENTIDAD_JWT_ISSUER`, `IDENTIDAD_JWT_AUDIENCIA`). Con
@@ -36,7 +61,7 @@ Para prenderlo, `kir-auth[jwt]` (suma PyJWT y cryptography).
 - `KirAuth(..., verificador_jwt=..., jwt_modo=...)`.
 - Extra `jwt` en `pyproject.toml`.
 
-## [0.5.0] — sin publicar
+## [0.5.0] — 2026-10-26, tag `v0.5.0`
 
 **Guarda de origen opcional** (`IDENTIDAD_SOLO_DESDE`). Con la variable (o el
 parámetro `identidad_solo_desde`) configurada con el nombre DNS del proxy de

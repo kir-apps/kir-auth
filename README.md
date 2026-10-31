@@ -95,10 +95,56 @@ También se puede pasar en código (`KirAuth(..., identidad_solo_desde="<app>-oa
 `identidad_solo_desde=None` la apaga aunque esté la variable. Acepta varios
 nombres separados por coma.
 
+### Atar un par a los emails que puede afirmar (desde 0.8.0)
+
+El sidecar valida la sesión, así que puede afirmar cualquier email. Un cliente
+técnico que entra por la red interna con su propia identidad (un barrido de
+links, un monitor) no: si se lo lista como un nombre más, desde ese par se
+aceptaría cualquier `X-Forwarded-Email`, incluido el de un platform admin. Para
+eso, el par se escribe `nombre=email`:
+
+```env
+IDENTIDAD_SOLO_DESDE=<app>-oauth2,<barrido>=robot@example.com
+IDENTIDAD_SOLO_DESDE=<app>-oauth2,<barrido>=robot@example.com;otro-robot@example.com
+```
+
+- **Pares separados por `,`; el par y sus emails por `=`; los emails entre sí por
+  `;`.** Ni `,`, ni `;`, ni `=` aparecen en un email común ni en un nombre DNS.
+  En un `.env` que se lee con un shell, entre comillas (por el `;`); en el
+  `environment:` de un `docker-compose.yml` o en un `env_file`, tal cual.
+- **Par sin `=`: cualquier email**, como siempre. La sintaxis de antes (una lista
+  de nombres) no cambia de significado.
+- **Par con `=`: sólo esos emails.** Desde ese par, otro email es **403** y no se
+  consulta la ACL. También es 403 si no manda el header de email pero sí un ID
+  token: el email del token no reemplaza la restricción. Se loguea un
+  `warning` con `extra={"evento": "identidad_rechazada", "motivo":
+  "email_no_permitido_para_el_par", "par": ..., "ip": ..., "email": "***@dominio"}`:
+  del email, sólo el dominio.
+- **Primero el par, después el email.** Desde una IP que no es de ningún par, el
+  email permitido del barrido también es 403 (`"motivo": "par_no_confiable"`).
+- **Los nombres se prueban en orden y gana el primero que coincide.** Poné el
+  sidecar primero: el tráfico de la gente nunca consulta el DNS de los nombres
+  que siguen (que pueden no existir la mayor parte del día, como el contenedor de
+  un barrido que corre un rato y se borra). Desde la IP de un par que no resuelve,
+  se rechaza, como con cualquier nombre.
+- **Mayúsculas y espacios no cuentan**: `Robot@Example.com ` es
+  `robot@example.com`, en la config y en el header.
+- **Si no se entiende, la app no arranca** (`ValueError` al crear `KirAuth`): un
+  par con `=` y sin emails (`barrido=`), emails sin par (`=robot@...`), algo que
+  no es un email (sin `@`, con espacios, con dos `@`), un email donde va un
+  nombre, o **el mismo par dos veces con restricción en alguna** (sin distinguir
+  mayúsculas). Un par sin restricción repetido se cuenta una vez, como antes.
+
+En código, además del string, se acepta una lista con las mismas entradas
+(`["<app>-oauth2", "<barrido>=robot@example.com"]`) o un dict
+(`{"<app>-oauth2": None, "<barrido>": ["robot@example.com"]}`; `None` = cualquiera).
+
 | Pedido | Sin configurar (default) | Configurada |
 |---|---|---|
 | Con identidad, desde el sidecar | pasa | pasa |
 | Con identidad, desde otra IP | pasa | **403**, sin consultar la ACL ni caer a `dev_email` |
+| Desde un par atado a emails (`par=email`), con uno de esos emails | pasa | pasa |
+| Desde un par atado a emails, con otro email (o sin email pero con ID token) | pasa | **403**, sin consultar la ACL |
 | Sin identidad (healthcheck, `X-Platform-Token`) | sin cambios | sin cambios |
 
 Sin configurar, el comportamiento es el de siempre y se loguea **un aviso por
